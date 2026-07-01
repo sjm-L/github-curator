@@ -1,6 +1,7 @@
 import requests
 import base64
 import json
+import time
 from datetime import date
 from google import genai
 from config import NOTION_TOKEN, DATABASE_ID, GEMINI_KEY
@@ -23,6 +24,20 @@ headers = {
 }
 today = str(date.today())
 
+
+# AI 호출 (실패하면 5초 쉬고 최대 3번 재시도)
+def ask_ai(prompt, retries=3):
+    for i in range(retries):
+        try:
+            return client.models.generate_content(
+                model="gemini-2.5-flash-lite", contents=prompt
+            ).text
+        except Exception as e:
+            print(f"  재시도 {i+1}/{retries} (에러: {str(e)[:50]})")
+            time.sleep(5)
+    return None
+
+
 for repo in repos:
     full_name = repo["full_name"]
     link = repo["html_url"]
@@ -34,7 +49,6 @@ for repo in repos:
     else:
         readme_text = repo.get("description") or "설명 없음"
 
-    # AI가 여러 값을 한 번에 JSON으로 판단
     prompt = f"""아래 GitHub README를 보고, Java/Spring 백엔드를 공부하는 초보 개발자 기준으로 판단해줘.
 반드시 아래 JSON 형식으로만 답해. 다른 말/코드블록 금지.
 
@@ -51,7 +65,10 @@ for repo in repos:
 프로젝트: {full_name}
 README: {readme_text[:5000]}"""
 
-    raw = client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text
+    raw = ask_ai(prompt)
+    if raw is None:
+        print("  ⚠️ AI 계속 실패, 건너뜀")
+        continue
 
     # JSON만 뽑아서 파싱 (안전장치)
     try:
@@ -64,7 +81,6 @@ README: {readme_text[:5000]}"""
     score = int(info.get("추천도", 0))
     print(f"  난이도:{info.get('난이도')} 추천도:{score}")
 
-    # 노션 저장
     data = {
         "parent": {"database_id": DATABASE_ID},
         "properties": {
