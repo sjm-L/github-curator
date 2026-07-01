@@ -7,17 +7,14 @@ from datetime import date
 from google import genai
 from config import NOTION_TOKEN, DATABASE_ID, GEMINI_KEY
 
-# 카테고리별 키워드
 CATEGORIES = {
     "백엔드 기본기": ["spring boot", "java backend", "rest api spring boot", "spring boot jpa"],
     "실무 감각": ["spring security jwt", "docker spring boot", "github actions java", "spring boot test"],
     "새로운 기술_AI": ["spring ai", "langchain4j", "rag spring boot", "mcp server java", "ai agent"],
     "프로젝트 아이디어": ["spring boot project", "backend project", "full stack project", "beginner backend project"],
 }
-# 카테고리별 뽑을 개수
 PICK = {"백엔드 기본기": 2, "실무 감각": 1, "새로운 기술_AI": 2, "프로젝트 아이디어": 1}
 
-# 오늘 검색할 키워드 랜덤 선정
 keywords = []
 for category, count in PICK.items():
     for kw in random.sample(CATEGORIES[category], count):
@@ -36,6 +33,28 @@ headers = {
 today = str(date.today())
 
 
+# ★ 추가: 노션에 이미 저장된 제목들 가져오기 (중복 방지용)
+def get_existing_titles():
+    titles = set()
+    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+    payload = {"page_size": 100}
+    while True:
+        res = requests.post(url, headers=headers, json=payload).json()
+        for page in res.get("results", []):
+            tp = page["properties"].get("제목", {}).get("title", [])
+            if tp:
+                titles.add(tp[0]["text"]["content"])
+        if res.get("has_more"):
+            payload["start_cursor"] = res["next_cursor"]
+        else:
+            break
+    return titles
+
+
+existing = get_existing_titles()
+print(f"\n이미 저장된 저장소: {len(existing)}개 (중복 시 건너뜀)")
+
+
 def ask_ai(prompt, retries=3):
     for i in range(retries):
         try:
@@ -48,12 +67,11 @@ def ask_ai(prompt, retries=3):
     return None
 
 
-# 카테고리별로 키워드 검색 → 각 1개씩 처리
 for category, kw in keywords:
     print(f"\n===== [{category}] '{kw}' 검색 =====")
     search = requests.get(
         "https://api.github.com/search/repositories",
-        params={"q": kw, "sort": "stars", "per_page": 1},   # 키워드당 1개
+        params={"q": kw, "sort": "stars", "per_page": 1},
     ).json()
 
     items = search.get("items", [])
@@ -64,6 +82,12 @@ for category, kw in keywords:
     repo = items[0]
     full_name = repo["full_name"]
     link = repo["html_url"]
+
+    # ★ 추가: 중복 체크
+    if full_name in existing:
+        print(f"  이미 있음(중복), 건너뜀: {full_name}")
+        continue
+
     print(f"처리 중: {full_name}")
 
     readme_res = requests.get(f"https://api.github.com/repos/{full_name}/readme")
@@ -110,7 +134,7 @@ README: {readme_text[:5000]}"""
             "한국어 요약": {"rich_text": [{"text": {"content": info.get("요약", "")[:2000]}}]},
             "난이도": {"select": {"name": info.get("난이도", "보통")}},
             "배울 점": {"rich_text": [{"text": {"content": info.get("배울점", "")[:2000]}}]},
-            "분류": {"multi_select": [{"name": category}]},   # ← 카테고리 저장
+            "분류": {"multi_select": [{"name": category}]},
             "블로그 소재": {"select": {"name": info.get("블로그소재", "애매")}},
             "왜 추천?": {"rich_text": [{"text": {"content": info.get("왜추천", "")[:2000]}}]},
             "읽기 상태": {"select": {"name": "안 봄"}},
@@ -122,5 +146,7 @@ README: {readme_text[:5000]}"""
     print("  노션 응답:", res.status_code)
     if res.status_code != 200:
         print("  에러:", res.text[:300])
+    else:
+        existing.add(full_name)   # ★ 이번에 저장한 것도 목록에 추가
 
 print("\n완료!")
