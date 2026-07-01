@@ -14,6 +14,7 @@ CATEGORIES = {
     "프로젝트 아이디어": ["spring boot project", "backend project", "full stack project", "beginner backend project"],
 }
 PICK = {"백엔드 기본기": 2, "실무 감각": 1, "새로운 기술_AI": 2, "프로젝트 아이디어": 1}
+MIN_SCORE = 7   # ★ 이 점수 미만은 저장 안 함
 
 keywords = []
 for category, count in PICK.items():
@@ -33,7 +34,6 @@ headers = {
 today = str(date.today())
 
 
-# ★ 추가: 노션에 이미 저장된 제목들 가져오기 (중복 방지용)
 def get_existing_titles():
     titles = set()
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
@@ -53,6 +53,7 @@ def get_existing_titles():
 
 existing = get_existing_titles()
 print(f"\n이미 저장된 저장소: {len(existing)}개 (중복 시 건너뜀)")
+print(f"추천도 {MIN_SCORE}점 이상만 저장합니다.")
 
 
 def ask_ai(prompt, retries=3):
@@ -83,7 +84,6 @@ for category, kw in keywords:
     full_name = repo["full_name"]
     link = repo["html_url"]
 
-    # ★ 추가: 중복 체크
     if full_name in existing:
         print(f"  이미 있음(중복), 건너뜀: {full_name}")
         continue
@@ -126,6 +126,11 @@ README: {readme_text[:5000]}"""
     score = int(info.get("추천도", 0))
     print(f"  난이도:{info.get('난이도')} 추천도:{score}")
 
+    # ★ 점수 필터
+    if score < MIN_SCORE:
+        print(f"  추천도 {score}점 < {MIN_SCORE}점, 저장 안 함")
+        continue
+
     data = {
         "parent": {"database_id": DATABASE_ID},
         "properties": {
@@ -147,6 +152,6 @@ README: {readme_text[:5000]}"""
     if res.status_code != 200:
         print("  에러:", res.text[:300])
     else:
-        existing.add(full_name)   # ★ 이번에 저장한 것도 목록에 추가
+        existing.add(full_name)
 
 print("\n완료!")
