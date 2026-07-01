@@ -1,5 +1,7 @@
 import requests
 import base64
+import json
+from datetime import date
 from google import genai
 from config import NOTION_TOKEN, DATABASE_ID, GEMINI_KEY
 
@@ -19,6 +21,7 @@ headers = {
     "Notion-Version": "2022-06-28",
     "Content-Type": "application/json",
 }
+today = str(date.today())
 
 for repo in repos:
     full_name = repo["full_name"]
@@ -31,21 +34,56 @@ for repo in repos:
     else:
         readme_text = repo.get("description") or "설명 없음"
 
-    # 핵심 요약만 (본문 번역 제거)
-    summary = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=f"다음 README를 한국어로 핵심만 5줄 이내로 요약해줘. 배지·링크·HTML 태그는 무시하고 프로젝트 내용만. 초보자가 이해하기 쉽게:\n\n{readme_text[:5000]}",
-    ).text[:2000]
+    # AI가 여러 값을 한 번에 JSON으로 판단
+    prompt = f"""아래 GitHub README를 보고, Java/Spring 백엔드를 공부하는 초보 개발자 기준으로 판단해줘.
+반드시 아래 JSON 형식으로만 답해. 다른 말/코드블록 금지.
 
+{{
+  "요약": "핵심만 5줄 이내 한국어. 배지·링크·태그 무시",
+  "난이도": "쉬움 또는 보통 또는 어려움",
+  "배울점": "이 프로젝트로 배울 수 있는 것 한 줄",
+  "분류": "Java 또는 Spring 또는 AI 또는 Tool 중 하나",
+  "블로그소재": "가능 또는 애매 또는 불가",
+  "왜추천": "초보 백엔드에게 추천하는 이유 한 줄",
+  "추천도": 1~10 사이 숫자
+}}
+
+프로젝트: {full_name}
+README: {readme_text[:5000]}"""
+
+    raw = client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text
+
+    # JSON만 뽑아서 파싱 (안전장치)
+    try:
+        raw = raw[raw.find("{"): raw.rfind("}") + 1]
+        info = json.loads(raw)
+    except:
+        print("  ⚠️ AI 응답 파싱 실패, 건너뜀")
+        continue
+
+    score = int(info.get("추천도", 0))
+    print(f"  난이도:{info.get('난이도')} 추천도:{score}")
+
+    # 노션 저장
     data = {
         "parent": {"database_id": DATABASE_ID},
         "properties": {
             "제목": {"title": [{"text": {"content": full_name}}]},
             "링크": {"url": link},
-            "한국어 요약": {"rich_text": [{"text": {"content": summary}}]},
+            "한국어 요약": {"rich_text": [{"text": {"content": info.get("요약", "")[:2000]}}]},
+            "난이도": {"select": {"name": info.get("난이도", "보통")}},
+            "배울 점": {"rich_text": [{"text": {"content": info.get("배울점", "")[:2000]}}]},
+            "분류": {"multi_select": [{"name": info.get("분류", "Java")}]},
+            "블로그 소재": {"select": {"name": info.get("블로그소재", "애매")}},
+            "왜 추천?": {"rich_text": [{"text": {"content": info.get("왜추천", "")[:2000]}}]},
+            "읽기 상태": {"select": {"name": "안 봄"}},
+            "추천도": {"number": min(score, 10)},
+            "저장일": {"date": {"start": today}},
         },
     }
     res = requests.post("https://api.notion.com/v1/pages", headers=headers, json=data)
     print("  노션 응답:", res.status_code)
+    if res.status_code != 200:
+        print("  에러:", res.text[:300])
 
 print("\n완료!")
